@@ -1,0 +1,632 @@
+---
+title: "Problem Set 6 - Waze Shiny Dashboard"
+author: "Peter Ganong, Maggie Shi, and Andre Oviedo"
+date: today
+format: 
+  pdf:
+    include-in-header: 
+       text: |
+         \usepackage{fvextra}
+         \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+include-before-body:
+  text: |
+    \RecustomVerbatimEnvironment{verbatim}{Verbatim}{
+      showspaces = false,
+      showtabs = false,
+      breaksymbolleft={},
+      breaklines
+    }
+---
+1. **ps6:** Due Sat 23rd at 5:00PM Central. Worth 100 points (80 points from questions, 10 points for correct submission and 10 points for code style) + 10 extra credit. 
+
+We use (`*`) to indicate a problem that we think might be time consuming. 
+
+# Steps to submit (10 points on PS6) {-}
+
+1. "This submission is my work alone and complies with the 30538 integrity
+policy." Add your initials to indicate your agreement: \*\*\_\_\*\*
+2. "I have uploaded the names of anyone I worked with on the problem set **[here](https://docs.google.com/forms/d/185usrCREQaUbvAXpWhChkjghdGgmAZXA3lPWpXLLsts/edit)**"  \*\*\_\_\*\* (2 point)
+3. Late coins used this pset: \*\*\_\_\*\* Late coins left after submission: \*\*\_\_\*\*
+
+4. Before starting the problem set, make sure to read and agree to the terms of data usage for the Waze data [here](https://canvas.uchicago.edu/courses/59054/quizzes/130617).
+
+5. Knit your `ps6.qmd` as a pdf document and name it `ps6.pdf`.
+6. Push your `ps6.qmd`, `ps6.pdf`, `requirements.txt`, and all created folders (we will create three Shiny apps so you will have at least three additional folders) to your Github repo (5 points). It is fine to use Github Desktop.
+7. Submit `ps6.pdf` and also link your Github repo via Gradescope (5 points)
+8. Tag your submission in Gradescope. For the Code Style part (10 points) please tag the whole correspondingsection for the code style rubric.
+
+*Notes: see the [Quarto documentation (link)](https://quarto.org/docs/authoring/figures.html) for directions on inserting images into your knitted document.*
+
+*IMPORTANT: For the App portion of the PS, in case you can not arrive to the expected functional dashboard we will need to take a look at your `app.py` file. You can use the following code chunk template to "import" and print the content of that file. Please, don't forget to also tag the corresponding code chunk as part of your submission!*
+
+```{python}
+#| echo: true
+#| eval: false
+
+def print_file_contents(file_path):
+    """Print contents of a file."""
+    try:
+        with open(file_path, 'r') as f:
+            content = f.read()
+            print("```python")
+            print(content)
+            print("```")
+    except FileNotFoundError:
+        print("```python")
+        print(f"Error: File '{file_path}' not found")
+        print("```")
+    except Exception as e:
+        print("```python") 
+        print(f"Error reading file: {e}")
+        print("```")
+
+print_file_contents("./top_alerts_map_byhour/app.py") # Change accordingly
+```
+
+```{python} 
+#| echo: false
+
+# Import required packages.
+import pandas as pd
+import altair as alt 
+import pandas as pd
+from datetime import date
+import numpy as np
+from altair_saver import save
+
+alt.data_transformers.disable_max_rows() 
+
+import json
+```
+
+# Background {-}
+
+## Data Download and Exploration (20 points){-} 
+
+1. 
+
+```{python}
+# Load the waze_data_sample.csv file
+waze_sample_df = pd.read_csv('./waze_data/waze_data_sample.csv')
+
+# Exclude 'ts', 'geo', 'geoWKT' and determine Altair-style data types
+altair_data_types = []
+for column in waze_sample_df.columns:
+    if column not in ['ts', 'geo', 'geoWKT']:
+        dtype = waze_sample_df[column].dtype
+        if pd.api.types.is_numeric_dtype(dtype):
+            altair_data_types.append((column, 'Quantitative'))
+        elif pd.api.types.is_datetime64_any_dtype(dtype):
+            altair_data_types.append((column, 'Temporal'))
+        else:
+            altair_data_types.append((column, 'Nominal'))
+
+# Print variable names and data types
+print(altair_data_types)
+
+```
+
+2. 
+
+```{python}
+waze_df = pd.read_csv('./waze_data/waze_data.csv')
+
+# Calculate NULL and non-NULL counts for each column
+null_counts = waze_df.isnull().sum().reset_index()
+not_null_counts = waze_df.notnull().sum().reset_index()
+
+# Rename columns for Altair compatibility
+null_counts.columns = ['variable', 'null_count']
+not_null_counts.columns = ['variable', 'not_null_count']
+
+# Merge into a single DataFrame
+null_data = pd.merge(null_counts, not_null_counts, on='variable')
+null_data = null_data.melt(id_vars='variable', 
+                           value_vars=['null_count', 'not_null_count'], 
+                           var_name='status', 
+                           value_name='count')
+
+# Replace status labels for clarity
+null_data['status'] = null_data['status'].replace({
+    'null_count': 'NULL',
+    'not_null_count': 'Not NULL'
+})
+
+# Create a stacked bar chart
+chart = alt.Chart(null_data).mark_bar().encode(
+    x=alt.X('variable:N', title='Variables', sort=null_data['variable'].unique()),
+    y=alt.Y('count:Q', title='Count'),
+    color=alt.Color('status:N', title='Status', scale=alt.Scale(scheme='tableau20'))
+).properties(
+    title='Stacked Bar Chart of NULL vs Not NULL Observations',
+    width=800,
+    height=400
+).configure_axis(
+    labelAngle=45
+)
+
+chart.show()
+chart.save('./plots/plot1.png')
+```
+![Image1](./plots/plot1.png)
+
+3. 
+
+```{python}
+# Extract unique values for 'type' and 'subtype'
+unique_types = waze_df['type'].fillna('Unclassified').unique()
+unique_subtypes = waze_df['subtype'].fillna('Unclassified').unique()
+#sort_subtypes = waze_sample_df.apply(
+#    lambda row: f"{row['type']} Unclassified" if pd.isna(row['subtype']) else row['subtype'],
+#    axis=1
+#)
+# Count how many types have a 'subtype' that is NA
+types_with_na_subtype = waze_df[waze_df['subtype'].isna()]['type'].unique()
+num_types_with_na_subtype = len(types_with_na_subtype)
+
+# Group types and subtypes to determine hierarchy
+type_subtype_counts = waze_df.groupby(['type', 'subtype']).size().reset_index(name='count')
+types_with_informative_subtypes = type_subtype_counts['type'].value_counts()
+
+
+unique_types, unique_subtypes, types_with_na_subtype, num_types_with_na_subtype
+```
+
+```{python}
+print(f"There are {num_types_with_na_subtype} types that have subtypes in NA")
+```
+
+There might be types like HAZARD_ON_ROAD_ROAD_KILL, means haraed, on road, road kill, road kill would be subsubtype.
+
+```{python}
+subtype_total = len(waze_sample_df[waze_sample_df['subtype'].isna()])
+subtype_total
+```
+
+- Accident
+  - Major
+  - Minor
+  - Unclassified
+- Hazard
+  - On Road
+    - Car Stopped
+    - Construction
+    - Emergency Vehicle
+    - Ice
+    - Lane Closed
+    - Object
+    - Pot Hole
+    - Road Kill
+    - Traffic Light Fault
+  - On Shoulder
+    - Animals
+    - Car Stopped
+    - Missing Sign
+  - Weather
+    - Flood
+    - Fog
+    - Hail
+    - Heavy Snow
+  - Unclassified
+- Jam
+  - Heavy Traffic
+  - Light Traffic
+  - Moderate Traffic
+  - Stand Still Traffic
+  - Unclassified
+- Road Closed
+  - Construction
+  - Event
+  - Hazard
+  - Unclassified
+
+
+We should keep the NA as Unclassified since there are too many columns that are NA, but have corresponding types. Simply dropping them will lose too much information.
+4. 
+
+
+
+```{python}
+# Manually define the crosswalk for all levels of the hierarchy
+crosswalk_data = [
+    # ACCIDENT
+    {"type": "ACCIDENT", "subtype": "ACCIDENT_MINOR", "updated_type": "Accident", "updated_subtype": "Minor", "updated_subsubtype": "Minor"},
+    {"type": "ACCIDENT", "subtype": "ACCIDENT_MAJOR", "updated_type": "Accident", "updated_subtype": "Major", "updated_subsubtype": "Major"},
+    {"type": "ACCIDENT", "subtype": "Unclassified", "updated_type": "Accident", "updated_subtype": "Unclassified", "updated_subsubtype": "Unclassified"},
+
+    # JAM
+    {"type": "JAM", "subtype": "JAM_MODERATE_TRAFFIC", "updated_type": "Jam", "updated_subtype": "Traffic", "updated_subsubtype": "Moderate"},
+    {"type": "JAM", "subtype": "JAM_HEAVY_TRAFFIC", "updated_type": "Jam", "updated_subtype": "Traffic", "updated_subsubtype": "Heavy"},
+    {"type": "JAM", "subtype": "JAM_STAND_STILL_TRAFFIC", "updated_type": "Jam", "updated_subtype": "Traffic", "updated_subsubtype": "Stand Still"},
+    {"type": "JAM", "subtype": "JAM_LIGHT_TRAFFIC", "updated_type": "Jam", "updated_subtype": "Traffic", "updated_subsubtype": "Light"},
+    {"type": "JAM", "subtype": "Unclassified", "updated_type": "Jam", "updated_subtype": "Unclassified", "updated_subsubtype": "Unclassified"},
+
+    # WEATHERHAZARD / HAZARD
+    {"type": "HAZARD", "subtype": "HAZARD_ON_ROAD", "updated_type": "Hazard", "updated_subtype": "On Road", "updated_subsubtype": "Unclassified"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_SHOULDER", "updated_type": "Hazard", "updated_subtype": "On Shoulder", "updated_subsubtype": "Unclassified"},
+    {"type": "HAZARD", "subtype": "HAZARD_WEATHER", "updated_type": "Hazard", "updated_subtype": "Weather", "updated_subsubtype": "Unclassified"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_ROAD_OBJECT", "updated_type": "Hazard", "updated_subtype": "On Road", "updated_subsubtype": "Object"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_ROAD_POT_HOLE", "updated_type": "Hazard", "updated_subtype": "On Road", "updated_subsubtype": "Pot Hole"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_ROAD_ROAD_KILL", "updated_type": "Hazard", "updated_subtype": "On Road", "updated_subsubtype": "Road Kill"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_SHOULDER_CAR_STOPPED", "updated_type": "Hazard", "updated_subtype": "On Shoulder", "updated_subsubtype": "Car Stopped"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_SHOULDER_ANIMALS", "updated_type": "Hazard", "updated_subtype": "On Shoulder", "updated_subsubtype": "Animals"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_SHOULDER_MISSING_SIGN", "updated_type": "Hazard", "updated_subtype": "On Shoulder", "updated_subsubtype": "Missing Sign"},
+    {"type": "HAZARD", "subtype": "HAZARD_WEATHER_FOG", "updated_type": "Hazard", "updated_subtype": "Weather", "updated_subsubtype": "Fog"},
+    {"type": "HAZARD", "subtype": "HAZARD_WEATHER_HAIL", "updated_type": "Hazard", "updated_subtype": "Weather", "updated_subsubtype": "Hail"},
+    {"type": "HAZARD", "subtype": "HAZARD_WEATHER_HEAVY_SNOW", "updated_type": "Hazard", "updated_subtype": "Weather", "updated_subsubtype": "Heavy Snow"},
+    {"type": "HAZARD", "subtype": "HAZARD_WEATHER_FLOOD", "updated_type": "Hazard", "updated_subtype": "Weather", "updated_subsubtype": "Flood"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_ROAD_LANE_CLOSED", "updated_type": "Hazard", "updated_subtype": "On Road", "updated_subsubtype": "Lane Closed"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_ROAD_ICE", "updated_type": "Hazard", "updated_subtype": "On Road", "updated_subsubtype": "Ice"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_ROAD_CONSTRUCTION", "updated_type": "Hazard", "updated_subtype": "On Road", "updated_subsubtype": "Construction"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_ROAD_CAR_STOPPED", "updated_type": "Hazard", "updated_subtype": "On Road", "updated_subsubtype": "Car Stopped"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_ROAD_TRAFFIC_LIGHT_FAULT", "updated_type": "Hazard", "updated_subtype": "On Road", "updated_subsubtype": "Traffic Light Fault"},
+    {"type": "HAZARD", "subtype": "HAZARD_ON_ROAD_EMERGENCY_VEHICLE", "updated_type": "Hazard", "updated_subtype": "On Road", "updated_subsubtype": "Emergency Vehicle"},
+    {"type": "HAZARD", "subtype": "Unclassified", "updated_type": "Hazard", "updated_subtype": "Unclassified", "updated_subsubtype": "Unclassified"},
+
+    
+    # ROAD_CLOSED
+    {"type": "ROAD_CLOSED", "subtype": "ROAD_CLOSED_HAZARD", "updated_type": "Road Closed", "updated_subtype": "Hazard", "updated_subsubtype": "Unclassified"},
+    {"type": "ROAD_CLOSED", "subtype": "ROAD_CLOSED_CONSTRUCTION", "updated_type": "Road Closed", "updated_subtype": "Construction", "updated_subsubtype": "Unclassified"},
+    {"type": "ROAD_CLOSED", "subtype": "ROAD_CLOSED_EVENT", "updated_type": "Road Closed", "updated_subtype": "Event", "updated_subsubtype": "Unclassified"},
+    {"type": "ROAD_CLOSED", "subtype": "Unclassified", "updated_type": "Road Closed", "updated_subtype": "Unclassified", "updated_subsubtype": "Unclassified"},
+]
+
+# Convert the crosswalk into a DataFrame
+crosswalk_df = pd.DataFrame(crosswalk_data)
+
+# Replace NA subtypes in the original dataset with None
+waze_df['subtype'] = waze_df['subtype'].replace({pd.NA: "Unclassified"})
+
+# Merge the crosswalk with the original dataset
+merged_data = pd.merge(
+    waze_df,
+    crosswalk_df,
+    how='left',
+    on=['type', 'subtype']
+)
+
+# Verify the results
+print("Crosswalk DataFrame:")
+print(crosswalk_df.head())
+
+print("\nMerged Dataset:")
+print(merged_data.head())
+```
+
+Below is the way of checking if they have the same type and subtype.
+```{python}
+unique_types_merged = merged_data['type'].unique()
+unique_subtypes_merged = merged_data['subtype'].unique()
+crosswalk_df = pd.DataFrame(crosswalk_data)
+unique_types_crosswalk = crosswalk_df['type'].unique()
+unique_subtypes_crosswalk = crosswalk_df['subtype'].unique()
+print(np.array_equal(np.sort(unique_types_crosswalk), np.sort(unique_types_merged)))
+print(np.array_equal(np.sort(unique_subtypes_crosswalk), np.sort(unique_subtypes_merged)))
+```
+# App #1: Top Location by Alert Type Dashboard (30 points){-}
+
+1. 
+```{python}
+import re
+
+def extract_coordinates(geo_string):
+    match = re.match(r"POINT\((-?\d+\.\d+)\s(-?\d+\.\d+)\)", geo_string)
+    if match:
+        longitude, latitude = match.groups()
+        return float(latitude), float(longitude)
+    return None, None
+
+# Apply the function to extract latitude and longitude
+merged_data['latitude'], merged_data['longitude'] = zip(*merged_data['geo'].apply(extract_coordinates))
+
+```
+```{python}
+# Bin latitude and longitude
+merged_data["longitude_bin"] = (np.floor(merged_data["longitude"] * 100) / 100).apply(lambda x: f"{x:.6f}")
+merged_data["latitude_bin"] = (np.floor(merged_data["latitude"] * 100) / 100).apply(lambda x: f"{x:.6f}")
+
+# Count the occurrences of binned combinations
+binned_counts = merged_data.groupby(["latitude_bin", "longitude_bin"]).size().reset_index(name="count")
+
+# Find the binned latitude-longitude combination with the greatest count
+max_binned_combination = binned_counts[binned_counts["count"] == binned_counts["count"].max()]
+
+binned_counts, max_binned_combination
+```
+```{python}
+chosen_type = "JAM"
+chosen_subtype = "JAM_STAND_STILL_TRAFFIC"
+filtered_df = merged_data[(merged_data["type"] == chosen_type) & (merged_data["subtype"] == chosen_subtype)]
+
+# Aggregate data to find the top 10 latitude-longitude bins with the most alerts
+alert_counts = (
+    filtered_df.groupby(["latitude_bin", "longitude_bin"])
+    .size()
+    .reset_index(name="alert_count")
+    .head(10)
+)
+
+alert_counts
+```
+```{python}
+df_alert_counts = (
+    merged_data.groupby(["latitude_bin", "longitude_bin", "type", "subtype", "updated_type", "updated_subtype", "updated_subsubtype"])
+    .size()
+    .reset_index(name="alert_count")
+    .sort_values(by="alert_count", ascending=False)
+)
+```
+```{python}
+#df_alert_counts_path = './top_alerts_map/df_alert.csv'
+#df_alert_counts.to_csv(df_alert_counts_path, index=False)
+```
+The level of aggraration is ["latitude_bin", "longitude_bin", "type", "subtype", "updated_type", "updated_subtype", "updated_subsubtype"], the rows are 11231.
+```{python}
+#merged_data.to_csv('./df_merged_data.csv', index=False)
+
+```
+2. 
+
+```{python}
+chosen_type = "ROAD_CLOSED"
+chosen_subtype_heavy = "ROAD_CLOSED_EVENT"
+filtered_heavy_df = merged_data[(merged_data["type"] == chosen_type) & (merged_data["subtype"] == chosen_subtype_heavy)]
+
+# Aggregate data to find the top 10 latitude-longitude bins with the most alerts
+alert_counts_heavy = (
+    filtered_heavy_df.groupby(["latitude_bin", "longitude_bin"])
+    .size()
+    .reset_index(name="alert_count")
+    .sort_values(by="alert_count", ascending=False)
+    .head(10)
+)
+
+# Create scatter plot
+scatter_plot = (
+    alt.Chart(alert_counts_heavy)
+    .mark_circle()
+    .encode(
+        x=alt.X("longitude_bin:Q", title="Longitude", scale=alt.Scale(domain=[(merged_data['longitude_bin'].max()), (merged_data['longitude_bin'].min())])),
+        y=alt.Y("latitude_bin:Q", title="Latitude", scale=alt.Scale(domain=[(merged_data['latitude_bin'].min()), (merged_data['latitude_bin'].max())])),
+        color=alt.Color("alert_count:Q", title="Number of Alerts"),
+        tooltip=["latitude_bin", "longitude_bin", "alert_count"],
+    )
+    .properties(
+        title="Top 10 Latitude-Longitude Bins with Highest 'Jam - Heavy Traffic' Alerts",
+        width=400,
+        height=400,
+    )
+)
+
+scatter_plot.save('./plots/plot2.png')
+scatter_plot
+```
+![Image1](./plots/plot2.png)
+
+3. 
+
+```{python}
+file_path = "./top_alerts_map/chicago-boundaries.geojson"
+#----
+with open(file_path) as f:
+    chicago_geojson = json.load(f)
+geo_data = alt.Data(values=chicago_geojson["features"])
+```
+4. 
+
+```{python}
+
+points = alt.Chart(alert_counts_heavy).mark_circle().encode(
+    longitude=alt.X("longitude_bin:Q"), 
+    latitude=alt.Y("latitude_bin:Q"),
+    tooltip=["latitude_bin", "longitude_bin", "alert_count"],
+
+)
+map_layer = (
+    alt.Chart(geo_data).mark_geoshape(fill="lightgray", stroke="black")
+    .properties(
+        width=400,
+        height=400
+    )
+    .project("identity", reflectY=True)  # Ensure correct alignment with coordinates
+)
+
+combined_plot = (
+    map_layer + scatter_plot
+).properties(title="Top 10")
+
+combined_plot.save('./plots/plot3.png')
+combined_plot
+```
+![Image1](./plots/plot3.png)
+
+The plot have points that diverges from the original location, on the lake. I removed the coordinates the next graph, used the latitude coordinates, and the points are back to normal.
+
+5. 
+
+![Image1](./plots/Screenshot1.png)
+
+32 types
+
+![Image1](./plots/Screenshot2.png)
+
+Downtown and Lincoln Park
+
+![Image1](./plots/Screensho3.png)
+
+Where are Major accidents most common?
+Highways, mostly I-90
+
+![Image1](./plots/Screenshot4.png)
+
+what are the road types most common for major accidents? Add Road Type column.
+
+
+# App #2: Top Location by Alert Type and Hour Dashboard (20 points) {-}
+
+1. 
+
+a. it would not be a good idea to collapse by ts since it is down to seconds, not meaningful to group by ts with this much of precision.
+
+b. 
+```{python}
+merged_data['ts'] = pd.to_datetime(merged_data['ts'])
+```
+```{python}
+merged_data['hour'] = merged_data['ts'].dt.strftime('%H:00')
+```
+```{python}
+chosen_type = "JAM"
+chosen_subtype = "JAM_HEAVY_TRAFFIC"
+hr_alert_counts = (
+    merged_data.groupby(["latitude_bin", "longitude_bin", "type", "subtype", "updated_type", "updated_subtype", "updated_subsubtype", "hour"]).size()
+    .reset_index(name="alert_count")
+    .sort_values(by="alert_count", ascending=False)
+)
+
+```
+There are 13669 columns
+
+
+```{python}
+hr_alert_counts_path = './top_alerts_map_byhour/top_alerts_map_byhour.csv'
+hr_alert_counts.to_csv(hr_alert_counts_path, index=False)
+```
+c. 
+```{python}
+hr_alert_counts_by_010203 = hr_alert_counts[(hr_alert_counts['hour'] == '01:00') | (hr_alert_counts['hour'] == '02:00') | (hr_alert_counts['hour'] == '03:00') & (hr_alert_counts["type"] == chosen_type) & (hr_alert_counts["subtype"] == chosen_subtype)]
+```
+```{python}
+hr_alert_counts_by_02 = hr_alert_counts[hr_alert_counts['hour'] == '02:00']
+
+```
+```{python}
+hr_alert_counts_by_03 = hr_alert_counts[hr_alert_counts['hour'] == '03:00']
+
+```
+```{python}
+points = alt.Chart(hr_alert_counts_by_010203.head(10)).mark_circle().encode(
+    longitude=alt.X("longitude_bin:Q"), 
+    latitude=alt.Y("latitude_bin:Q"),
+    tooltip=["latitude_bin", "longitude_bin", "alert_count"],
+
+)
+map_layer = (
+    alt.Chart(geo_data).mark_geoshape(fill="lightgray", stroke="black")
+    .properties(
+        width=400,
+        height=400
+    )
+    .project("identity", reflectY=True)  # Ensure correct alignment with coordinates
+)
+
+combined_plot = (
+    map_layer + points
+).properties(title="Top 10")
+
+combined_plot.save('./plots/plot4.png')
+combined_plot
+```
+![Image1](./plots/plot4.png)
+
+This time I used the latitide longitude without the xy axis. the points are normal
+2. 
+a. 
+
+![Image1](./plots/Screenshot5.png)
+
+b.
+
+![Image1](./plots/Screensho6.png)
+
+c.
+
+Looks like it is done more in the night hours; To better answer this question we need to use App3.
+
+# App #3: Top Location by Alert Type and Hour Dashboard (20 points){-}
+
+1. 
+
+a. 
+
+No. There are too many ranges.
+
+b. 
+
+```{python}
+df_alert_hr_counts = (
+    merged_data.groupby(["latitude_bin", "longitude_bin", "type", "subtype", "updated_type", "updated_subtype", "updated_subsubtype", "hour"])
+    .size()
+    .reset_index(name="alert_count")
+    .sort_values(by="alert_count", ascending=False)
+)
+```
+
+```{python}
+filtered_heavy_df = df_alert_hr_counts[(df_alert_hr_counts["type"] == chosen_type) & (df_alert_hr_counts["subtype"] == chosen_subtype)]
+```
+
+
+```{python}
+filtered_heavy_df['hour_numeric'] = filtered_heavy_df['hour'].str.split(":").str[0].astype(int)
+```
+
+```{python}
+hr_alert_counts_b_69 = filtered_heavy_df[(filtered_heavy_df['hour_numeric'] >= 6) & (filtered_heavy_df['hour_numeric'] <= 9)]
+hr_alert_counts_b_69.head(10)
+```
+
+
+```{python}
+points = alt.Chart(hr_alert_counts_b_69.head(10)).mark_circle().encode(
+    longitude=alt.X("longitude_bin:Q"), 
+    latitude=alt.Y("latitude_bin:Q"),
+    tooltip=["latitude_bin", "longitude_bin", "alert_count"],
+
+)
+map_layer = (
+    alt.Chart(geo_data).mark_geoshape(fill="lightgray", stroke="black")
+    .properties(
+        width=400,
+        height=400
+    )
+    .project("identity", reflectY=True)  # Ensure correct alignment with coordinates
+)
+
+combined_plot = (
+    map_layer + points
+).properties(title="Top 10")
+
+combined_plot.save('./plots/plot5.png')
+combined_plot
+```
+![Image1](./plots/plot5.png)
+    
+2.  
+    
+a. ![Image1](./plots/Screenshot7.png)
+
+
+b. ![Image1](./plots/Screenshot7.png)
+
+
+3. 
+
+a. ![Image1](./plots/Screenshot8.png)
+
+True and Flase
+
+b. 
+
+![Image1](./plots/9.png)
+
+![Image1](./plots/Screenshot10.png)
+
+c. 
+
+![Image1](./plots/9.png)
+
+![Image1](./plots/Screenshot10.png)
+
+
+d. delete the slider, add code to judge if the time of the column is morning and afternoon then display accordingly.
